@@ -10,7 +10,7 @@ from boto import config
 from os.path import expanduser
 
 home = expanduser("~")
-required_params = ["Service", "Component",  "Environment", "Region", "SubnetId", "ImageId"]
+required_params = ["Service", "Component",  "Environment", "Region"]
 output_fields = ["Timestamp", "ResourceStatus", "ResourceType", "LogicalResourceId", "ResourceStatusReason"]
 completed_states = ['CREATE_FAILED','CREATE_COMPLETE','ROLLBACK_FAILED','ROLLBACK_COMPLETE','DELETE_FAILED','DELETE_COMPLETE','UPDATE_COMPLETE','UPDATE_ROLLBACK_FAILED','UPDATE_ROLLBACK_COMPLETE']
 
@@ -66,8 +66,8 @@ def main(argv):
 			profile_name = arg
 
 	template = load_json(args[1])
-	params_list = load_json(args[2])
 	template_string = json.dumps(template)
+	params_list = load_json(args[2])
 
 	# validate parameters format and key values
 	try:
@@ -85,6 +85,7 @@ def main(argv):
 
 	session = boto3.session.Session(profile_name=profile_name)
 	client = session.client('cloudformation')
+	cloudformation = session.resource('cloudformation')
 
 	# initiate stack create or update
 	if action == "create":
@@ -96,8 +97,19 @@ def main(argv):
 		start_index = len(events['StackEvents'])
 		
 		# use ImageID from running stack so we don't nuke deployed application
-		running_template = json.loads(client.get_template(StackName=stack_name)['TemplateBody'])
-		################## this need to be completed #####################
+		stack = cloudformation.Stack(stack_name)
+		ami = None
+		for param in stack.parameters:
+			if param['ParameterKey'] == 'ImageId':
+				ami = param['ParameterValue']
+		if ami:
+			for i, param in enumerate(params_list):
+				if param['ParameterKey'] == 'ImageId':
+					if param['ParameterValue'] == ami:
+						print("INFO: ImageId in running stack same as local file.")
+					else:
+						params_list[i]['ParameterValue'] = ami
+						print("INFO: Updating CloudFormation parameters to use ImageId from running stack (" + ami +")")
 		response = client.update_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
 
 	# print out stack evens as they occur
