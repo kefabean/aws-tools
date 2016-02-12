@@ -1,0 +1,131 @@
+#!/usr/bin/python
+
+import boto3
+import json
+import time
+import sys, getopt
+import getpass
+from boto import sts
+from boto import config
+from os.path import expanduser
+
+home = expanduser("~")
+required_params = ["Service", "Component",  "Environment", "Region", "SubnetId", "ImageId"]
+output_fields = ["Timestamp", "ResourceStatus", "ResourceType", "LogicalResourceId", "ResourceStatusReason"]
+completed_states = ['CREATE_FAILED','CREATE_COMPLETE','ROLLBACK_FAILED','ROLLBACK_COMPLETE','DELETE_FAILED','DELETE_COMPLETE','UPDATE_COMPLETE','UPDATE_ROLLBACK_FAILED','UPDATE_ROLLBACK_COMPLETE']
+
+def usage():
+	print
+	print "Usage: stack -p <profile> create|update <profile> <template> <params>"
+	print
+	print "Creates or update CloudFormation stack using template and parameters files."
+	print
+	print "-h, --help		display this message"
+	print "-p, --profile		profile to use to access AWS"
+	print "create|update		action to create new or update existing CloudFormation stack"
+	print "<template>		filename of JSON CloudFormation template"
+	print "<params>		filename of JSON CloudFormation parameters"
+	print
+
+def load_json(filename):
+	try:
+		data = json.load(open(filename))
+	except ValueError as e:
+		print("ERROR: Malformed JSON in '" + filename + "': " + str(e) )
+		sys.exit(2)
+	except IOError as e:
+		print ("ERROR: '" + filename + "' file not found")
+		sys.exit(2)
+	return data
+
+def main(argv):
+
+	# validate supplied command line options and arguments
+	try:
+		opts, args = getopt.getopt(argv, "hp:", ["profile="])
+	except getopt.GetoptError:
+		usage()
+		sys.exit(2)
+
+	if (len(args) != 3):
+		usage()
+		sys.exit(2)
+	
+	if args[0] != "create" and args[0] != "update":
+		print("ERROR: invalid cloudformation action.")
+		usage()
+		sys.exit(2)
+	else:
+		action = args[0]
+
+	for opt, arg in opts:
+		if opt in ("-h"):
+			usage()
+			sys.exit()
+		elif opt in ("-p", "--profile"):
+			profile_name = arg
+
+	template = load_json(args[1])
+	params_list = load_json(args[2])
+	template_string = json.dumps(template)
+
+	# validate parameters format and key values
+	try:
+		params_dict = { param["ParameterKey"] : param["ParameterValue"] for param in params_list}
+	except KeyError as e:
+		print("ERROR: Invalid structure of parameters file.")
+		sys.exit(2)
+
+	for param in required_params:
+		if not param in params_dict:
+			print("ERROR: Required parameter '" + param + "' not found in parameters file.")
+			sys.exit(2) 
+
+	stack_name = params_dict["Service"] + "-" + params_dict["Component"] + "-" + params_dict["Environment"] + "-" + params_dict["Region"]
+
+	session = boto3.session.Session(profile_name=profile_name)
+	client = session.client('cloudformation')
+
+	# initiate stack create or update
+	if action == "create":
+		response = client.create_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
+		start_index = 0
+	elif action == "update":
+		# get any existing events so we don't have to display them
+		events = client.describe_stack_events(StackName=stack_name)
+		start_index = len(events['StackEvents'])
+		
+		# use ImageID from running stack so we don't nuke deployed application
+		running_template = json.loads(client.get_template(StackName=stack_name)['TemplateBody'])
+		################## this need to be completed #####################
+		response = client.update_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
+
+	# print out stack evens as they occur
+	print("\nEVENTS:\n")
+	while True:
+		stack_events = client.describe_stack_events(StackName=stack_name)
+		events = stack_events['StackEvents']
+		events.reverse()
+		end_index = len(events)
+		for index in range(start_index, end_index):
+			for field in output_fields:
+				if field in events[index]:
+					print(str(events[index][field])),
+			print
+		start_index = end_index
+		stack = client.describe_stacks(StackName=stack_name)
+		stack_state = stack['Stacks'][0]['StackStatus']
+		if stack_state in completed_states:
+			print("\nRESOURCES:\n")
+			resources = client.describe_stack_resources(StackName=stack_name)
+			for resource in resources['StackResources']:
+ 				for field in ["ResourceType", "PhysicalResourceId", "LogicalResourceId", "ResourceStatus"]:
+					if field in resource:
+						print(resource[field]),
+				print
+			print("\nSTATUS: " + stack_state)
+			break
+		time.sleep(2)
+
+if __name__ == "__main__":
+	main(sys.argv[1:])
