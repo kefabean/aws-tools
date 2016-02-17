@@ -1,0 +1,63 @@
+#!/usr/bin/python
+
+import json, sys, getopt, urllib2, ssl
+
+region = "us-east-1"
+offer_code = "AmazonEC2"
+
+def usage():
+	print
+	print "Usage: pricing"
+	print
+	print "Retrieves current EC2 and RDS pricing data in CSV format suitable for analysis in Excel spreadsheet."
+	print
+	print "-h, --help		display this message"
+	print
+
+def merge(key, value):
+	yield { key:value}
+
+def main(argv):
+
+	# validate supplied command line options and arguments
+	try:
+		opts, args = getopt.getopt(argv, "hp:", ["profile="])
+	except getopt.GetoptError:
+		usage()
+		sys.exit(2)
+	if (len(args) > 0):
+		usage()
+		sys.exit(2)
+	if opts:
+		usage()
+		sys.exit()
+
+	# url = "https://pricing." + region + ".amazonaws.com/offers/v1.0/aws/" + offer_code + "/current/index.json"
+	# response = urllib2.urlopen(url)
+	data = json.load(open("index.json"))
+
+	for pkey, pvalue in data['products'].iteritems():
+		if "productFamily" in pvalue and \
+				"attributes" in pvalue and \
+				pvalue['productFamily'] == "Compute Instance" and \
+				pvalue['attributes']['tenancy'] == "Shared":
+			for rkey in data['terms']['Reserved']: 
+				if pkey in rkey:
+					for rrkey, rvalue in data['terms']['Reserved'][rkey].iteritems():
+						if "termAttributes" in rvalue and \
+								rvalue['termAttributes']['LeaseContractLength'] == "1yr" and \
+								rvalue['termAttributes']['PurchaseOption'] == "All Upfront":
+							# print 1 yr reserved instance pricing
+							price = { dvalue['unit'].lower():dvalue['pricePerUnit']['USD'] for dvalue in rvalue['priceDimensions'].values() }
+							attr = pvalue['attributes']
+							print(
+								attr['location'] + ", " + 
+								attr['instanceType'] + ", " + 
+								attr['operatingSystem'] + ", " +
+								attr['licenseModel'] + ", " +
+								price['quantity'] + ", " +
+								price['hrs'] + ", " +
+							" ")
+
+if __name__ == "__main__":
+	main(sys.argv[1:])
