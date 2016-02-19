@@ -1,6 +1,6 @@
 # aws-tools
 
-Useful AWS-related command line tools written in python
+Useful AWS-related command line tools written in python:
 
 - **mfa** - uses restricted access credentials stored cli/boto profile to generate temporary admin credentials for cli/boto using MFA
 - **pricing** - downloads EC2 and RDS pricing information from AWS pricing API in CSV format for easy import in to Microsoft Excel
