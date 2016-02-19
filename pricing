@@ -1,63 +1,123 @@
 #!/usr/bin/python
 
-import json, sys, getopt, urllib2, ssl
+from __future__ import print_function
+import ujson as json, sys, getopt, urllib2, ssl
 
-region = "us-east-1"
-offer_code = "AmazonEC2"
+offer_codes = {
+	"AmazonEC2" : {
+		"productFamily" : "Compute Instance",
+		"attributes" : [ "instanceType", "operatingSystem", "licenseModel" ]
+	},
+	"AmazonRDS" : {
+		"productFamily" : "Database Instance",
+		"attributes" : [ "instanceType", "databaseEngine", "licenseModel" ]
+	}
+}
 
-def usage():
-	print
-	print "Usage: pricing"
-	print
-	print "Retrieves current EC2 and RDS pricing data in CSV format suitable for analysis in Excel spreadsheet."
-	print
-	print "-h, --help		display this message"
-	print
+region = {
+	"Asia Pacific (Seoul)":"ap-northeast-2",
+	"Asia Pacific (Singapore)":"ap-southeast-1",
+	"Asia Pacific (Sydney)":"ap-southeast-2",
+	"Asia Pacific (Tokyo)":"ap-northeast-1",
+	"AWS GovCloud (US)":"us-gov-1",
+	"EU (Frankfurt)":"eu-central-1",
+	"EU (Ireland)":"eu-west-1",
+	"South America (Sao Paulo)":"sa-east-1",
+	"US East (N. Virginia)":"us-east-1",
+	"US West (N. California)":"us-west-1",
+	"US West (Oregon)":"us-west-2"
+}
 
-def merge(key, value):
-	yield { key:value}
+def chunk_report(bytes_so_far, chunk_size, total_size):
+   percent = float(bytes_so_far) / total_size
+   percent = round(percent*100, 2)
+   sys.stderr.write("Downloaded %d of %d bytes (%0.2f%%)\r" % 
+       (bytes_so_far, total_size, percent))
+   if bytes_so_far >= total_size:
+      sys.stderr.write('\n')
+
+def chunk_read(response, chunk_size=8192, report_hook=None):
+	data = ""
+	total_size = response.info().getheader('Content-Length').strip()
+	total_size = int(total_size)
+	bytes_so_far = 0
+	while 1:
+		chunk = response.read(chunk_size)
+		bytes_so_far += len(chunk)
+		data += chunk
+		if not chunk:
+			break
+		if report_hook:
+			report_hook(bytes_so_far, chunk_size, total_size)
+	return data
+
+def display_output(attr, term, offer, term_type):
+	
+	if term_type == "Reserved" and not(
+			"termAttributes" in term and 
+			term['termAttributes']['LeaseContractLength'] == "1yr" and 
+			term['termAttributes']['PurchaseOption'] == "All Upfront"):
+		return
+	elif offer == "AmazonEC2" and attr['tenancy'] == "Dedicated":
+		return
+
+	price = float(0)
+	for price_dimension in term['priceDimensions'].values():
+		if price_dimension['unit'].lower() == "quantity":
+			price += float(price_dimension['pricePerUnit']['USD'])/(365*24)
+		else: 
+			price += float(price_dimension['pricePerUnit']['USD'])
+	if price == 0:
+		return
+
+	if offer == "AmazonEC2":
+		print( 
+			region[attr['location']],",",
+			attr['instanceType'],",",
+			attr['operatingSystem'],",",
+			attr['licenseModel'],",",
+			term_type,",",
+			attr['vcpu'],",",
+			attr['memory'],",",
+			attr['networkPerformance'],",",
+			price,sep="")
+	elif offer == "AmazonRDS":
+		if "databaseEdition" in attr:
+			databaseEdition = attr['databaseEdition'] + " "
+		else:
+			databaseEdition = ""
+		print( 
+			region[attr['location']],",",
+			attr['instanceType'],",",
+			attr['databaseEngine']," ",
+			databaseEdition,
+			attr['deploymentOption'],",",
+			attr['licenseModel'],",",
+			term_type,",",
+			attr['vcpu'],",",
+			attr['memory'],",",
+			attr['networkPerformance'],",",
+			price, sep="")
+	return
 
 def main(argv):
-
-	# validate supplied command line options and arguments
-	try:
-		opts, args = getopt.getopt(argv, "hp:", ["profile="])
-	except getopt.GetoptError:
-		usage()
-		sys.exit(2)
-	if (len(args) > 0):
-		usage()
-		sys.exit(2)
-	if opts:
-		usage()
-		sys.exit()
-
-	# url = "https://pricing." + region + ".amazonaws.com/offers/v1.0/aws/" + offer_code + "/current/index.json"
-	# response = urllib2.urlopen(url)
-	data = json.load(open("index.json"))
-
-	for pkey, pvalue in data['products'].iteritems():
-		if "productFamily" in pvalue and \
-				"attributes" in pvalue and \
-				pvalue['productFamily'] == "Compute Instance" and \
-				pvalue['attributes']['tenancy'] == "Shared":
-			for rkey in data['terms']['Reserved']: 
-				if pkey in rkey:
-					for rrkey, rvalue in data['terms']['Reserved'][rkey].iteritems():
-						if "termAttributes" in rvalue and \
-								rvalue['termAttributes']['LeaseContractLength'] == "1yr" and \
-								rvalue['termAttributes']['PurchaseOption'] == "All Upfront":
-							# print 1 yr reserved instance pricing
-							price = { dvalue['unit'].lower():dvalue['pricePerUnit']['USD'] for dvalue in rvalue['priceDimensions'].values() }
-							attr = pvalue['attributes']
-							print(
-								attr['location'] + ", " + 
-								attr['instanceType'] + ", " + 
-								attr['operatingSystem'] + ", " +
-								attr['licenseModel'] + ", " +
-								price['quantity'] + ", " +
-								price['hrs'] + ", " +
-							" ")
-
+	for offer in offer_codes:
+		product_family = offer_codes[offer]['productFamily']
+		print("Downloading " + offer + " pricing data for " + offer_codes[offer]['productFamily'] , file=sys.stderr)
+		url = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/" + \
+			offer + "/current/index.json"
+		response = urllib2.urlopen(url)
+		data = json.loads(chunk_read(response, report_hook=chunk_report))
+		#data = json.load(open(offer))
+		products = data['products']
+		for product_key, product in products.iteritems():
+			if "productFamily" in product and \
+					"attributes" in product and \
+					product_family in product['productFamily']:
+				for term_type, terms in data['terms'].iteritems():
+					if product_key in terms:
+						for term in terms[product_key].values():
+								display_output(product['attributes'], term, offer, term_type)
+							
 if __name__ == "__main__":
 	main(sys.argv[1:])
