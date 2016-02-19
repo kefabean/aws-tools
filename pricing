@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 from __future__ import print_function
-import ujson as json, sys, getopt, urllib2, ssl
+import json, sys, getopt, urllib2, ssl
 
 offer_codes = {
 	"AmazonEC2" : {
