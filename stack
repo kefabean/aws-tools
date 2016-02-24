@@ -90,11 +90,8 @@ def main(argv):
             sys.exit(2) 
       # stack_name = params_dict["Service"] + "_" + params_dict["Component"] + "_" + params_dict["Environment"] + "_" + params_dict["Region"]
       stack_name = "-".join([params_dict[required_param] for required_param in required_params]) 
-      print stack_name
       params_filename = args[2].replace("-params-", "-").replace(".json", "") 
-      print params_filename
       template_filename = args[1].replace("-template.json", "") 
-      print template_filename
       if stack_name != params_filename:
          print("ERROR: Parameters defined in file do not match those in params filename")
          sys.exit(2)
