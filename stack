@@ -14,130 +14,149 @@ required_params = ["Service", "Component",  "Environment", "Region"]
 output_fields = ["Timestamp", "ResourceStatus", "ResourceType", "LogicalResourceId", "ResourceStatusReason"]
 completed_states = ['CREATE_FAILED','CREATE_COMPLETE','ROLLBACK_FAILED','ROLLBACK_COMPLETE','DELETE_FAILED','DELETE_COMPLETE','UPDATE_COMPLETE','UPDATE_ROLLBACK_FAILED','UPDATE_ROLLBACK_COMPLETE']
 
-def usage():
-	print
-	print "Usage: stack -p <profile> create|update <profile> <template> <params>"
-	print
-	print "Creates or update CloudFormation stack using template and parameters files."
-	print
-	print "-h, --help		display this message"
-	print "-p, --profile		profile to use to access AWS"
-	print "create|update		action to create new or update existing CloudFormation stack"
-	print "<template>		filename of JSON CloudFormation template"
-	print "<params>		filename of JSON CloudFormation parameters"
-	print
+def usage(exit_code):
+   print
+   print "Usage:"
+   print "         stack -p <profile> create|update <profile> <template> <params>"
+   print "         stack -p <profile> delete <stackname>"
+   print
+   print "Creates or update CloudFormation stack using template and parameters files."
+   print
+   print "-h, --help      display this message"
+   print "-p, --profile      profile to use to access AWS"
+   print "create|update      action to create new or update existing CloudFormation stack"
+   print "<template>      filename of JSON CloudFormation template"
+   print "<params>      filename of JSON CloudFormation parameters"
+   print "<stackname>      name of stack to be deleted"
+   print
+   sys.exit(exit_code)
 
 def load_json(filename):
-	try:
-		data = json.load(open(filename))
-	except ValueError as e:
-		print("ERROR: Malformed JSON in '" + filename + "': " + str(e) )
-		sys.exit(2)
-	except IOError as e:
-		print ("ERROR: '" + filename + "' file not found")
-		sys.exit(2)
-	return data
+   try:
+      data = json.load(open(filename))
+   except ValueError as e:
+      print("ERROR: Malformed JSON in '" + filename + "': " + str(e) )
+      sys.exit(2)
+   except IOError as e:
+      print ("ERROR: '" + filename + "' file not found")
+      sys.exit(2)
+   return data
 
 def main(argv):
 
-	# validate supplied command line options and arguments
-	try:
-		opts, args = getopt.getopt(argv, "hp:", ["profile="])
-	except getopt.GetoptError:
-		usage()
-		sys.exit(2)
+   # validate supplied command line options and arguments
+   try:
+      opts, args = getopt.getopt(argv, "hp:", ["profile="])
+   except getopt.GetoptError:
+      usage(2)
+   if not args or \
+         (args[0] == "create" or args[0] == "update") and len(args) != 3 or \
+         (args[0] =="delete" and len(args) != 2) or \
+         (args[0] != "create" and args[0] != "update" and args[0] != "delete"):
+      usage(2)
+   
+   action = args[0]
+   for opt, arg in opts:
+      if opt in ("-h"):
+         usage(0)
+      elif opt in ("-p", "--profile"):
+         profile_name = arg
 
-	if (len(args) != 3):
-		usage()
-		sys.exit(2)
-	
-	if args[0] != "create" and args[0] != "update":
-		print("ERROR: invalid cloudformation action.")
-		usage()
-		sys.exit(2)
-	else:
-		action = args[0]
+   session = boto3.session.Session(profile_name=profile_name)
+   client = session.client('cloudformation')
+   cloudformation = session.resource('cloudformation')
 
-	for opt, arg in opts:
-		if opt in ("-h"):
-			usage()
-			sys.exit()
-		elif opt in ("-p", "--profile"):
-			profile_name = arg
+   if action == "delete":
+      stack_name = args[1]
+      stack = client.describe_stacks(StackName=stack_name)
+      stack_id = stack['Stacks'][0]['StackId']
+      # get any existing events so we don't have to display them
+      events = client.describe_stack_events(StackName=stack_id)
+      start_index = len(events['StackEvents'])
+      response = client.delete_stack(StackName=stack_id)
+   else:
+      template = load_json(args[1])
+      template_string = json.dumps(template)
+      params_list = load_json(args[2])
+      # validate parameters format and key values
+      try:
+         params_dict = { param["ParameterKey"] : param["ParameterValue"] for param in params_list}
+      except KeyError as e:
+         print("ERROR: Invalid structure of parameters file.")
+         sys.exit(2)
+      for param in required_params:
+         if not param in params_dict:
+            print("ERROR: Required parameter '" + param + "' not found in parameters file.")
+            sys.exit(2) 
+      # stack_name = params_dict["Service"] + "_" + params_dict["Component"] + "_" + params_dict["Environment"] + "_" + params_dict["Region"]
+      stack_name = "-".join([params_dict[required_param] for required_param in required_params]) 
+      print stack_name
+      params_filename = args[2].replace("-params-", "-").replace(".json", "") 
+      print params_filename
+      template_filename = args[1].replace("-template.json", "") 
+      print template_filename
+      if stack_name != params_filename:
+         print("ERROR: Parameters defined in file do not match those in params filename")
+         sys.exit(2)
+      elif template_filename not in stack_name:
+         print("ERROR: Parameters defined in file do not match those in template filename")
+         sys.exit(2)
 
-	template = load_json(args[1])
-	template_string = json.dumps(template)
-	params_list = load_json(args[2])
+   # initiate stack create or update
+   if action == "create":
+      response = client.create_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
+      stack = client.describe_stacks(StackName=stack_name)
+      stack_id = stack['Stacks'][0]['StackId']
+      start_index = 0
+   elif action == "update":
+      # get any existing events so we don't have to display them
+      stack = client.describe_stacks(StackName=stack_name)
+      stack_id = stack['Stacks'][0]['StackId']
+      events = client.describe_stack_events(StackName=stack_id)
+      start_index = len(events['StackEvents'])
+      
+      # use ImageID from running stack so we don't nuke deployed application
+      stack = cloudformation.Stack(stack_id)
+      ami = None
+      for param in stack.parameters:
+         if param['ParameterKey'] == 'ImageId':
+            ami = param['ParameterValue']
+      if ami:
+         for i, param in enumerate(params_list):
+            if param['ParameterKey'] == 'ImageId':
+               if param['ParameterValue'] == ami:
+                  print("INFO: ImageId in running stack same as local file.")
+               else:
+                  params_list[i]['ParameterValue'] = ami
+                  print("INFO: Updating CloudFormation parameters to use ImageId from running stack (" + ami +")")
+      response = client.update_stack(StackName=stack_id, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
 
-	# validate parameters format and key values
-	try:
-		params_dict = { param["ParameterKey"] : param["ParameterValue"] for param in params_list}
-	except KeyError as e:
-		print("ERROR: Invalid structure of parameters file.")
-		sys.exit(2)
-
-	for param in required_params:
-		if not param in params_dict:
-			print("ERROR: Required parameter '" + param + "' not found in parameters file.")
-			sys.exit(2) 
-
-	stack_name = params_dict["Service"] + "-" + params_dict["Component"] + "-" + params_dict["Environment"] + "-" + params_dict["Region"]
-
-	session = boto3.session.Session(profile_name=profile_name)
-	client = session.client('cloudformation')
-	cloudformation = session.resource('cloudformation')
-
-	# initiate stack create or update
-	if action == "create":
-		response = client.create_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
-		start_index = 0
-	elif action == "update":
-		# get any existing events so we don't have to display them
-		events = client.describe_stack_events(StackName=stack_name)
-		start_index = len(events['StackEvents'])
-		
-		# use ImageID from running stack so we don't nuke deployed application
-		stack = cloudformation.Stack(stack_name)
-		ami = None
-		for param in stack.parameters:
-			if param['ParameterKey'] == 'ImageId':
-				ami = param['ParameterValue']
-		if ami:
-			for i, param in enumerate(params_list):
-				if param['ParameterKey'] == 'ImageId':
-					if param['ParameterValue'] == ami:
-						print("INFO: ImageId in running stack same as local file.")
-					else:
-						params_list[i]['ParameterValue'] = ami
-						print("INFO: Updating CloudFormation parameters to use ImageId from running stack (" + ami +")")
-		response = client.update_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
-
-	# print out stack evens as they occur
-	print("\nEVENTS:\n")
-	while True:
-		stack_events = client.describe_stack_events(StackName=stack_name)
-		events = stack_events['StackEvents']
-		events.reverse()
-		end_index = len(events)
-		for index in range(start_index, end_index):
-			for field in output_fields:
-				if field in events[index]:
-					print(str(events[index][field])),
-			print
-		start_index = end_index
-		stack = client.describe_stacks(StackName=stack_name)
-		stack_state = stack['Stacks'][0]['StackStatus']
-		if stack_state in completed_states:
-			print("\nRESOURCES:\n")
-			resources = client.describe_stack_resources(StackName=stack_name)
-			for resource in resources['StackResources']:
- 				for field in ["ResourceType", "PhysicalResourceId", "LogicalResourceId", "ResourceStatus"]:
-					if field in resource:
-						print(resource[field]),
-				print
-			print("\nSTATUS: " + stack_state)
-			break
-		time.sleep(2)
+   # print out stack evens as they occur
+   print("\nEVENTS:\n")
+   while True:
+      stack_events = client.describe_stack_events(StackName=stack_id)
+      events = stack_events['StackEvents']
+      events.reverse()
+      end_index = len(events)
+      for index in range(start_index, end_index):
+         for field in output_fields:
+            if field in events[index]:
+               print(str(events[index][field])),
+         print
+      start_index = end_index
+      stack = client.describe_stacks(StackName=stack_id)
+      stack_state = stack['Stacks'][0]['StackStatus']
+      if stack_state in completed_states:
+         print("\nRESOURCES:\n")
+         resources = client.describe_stack_resources(StackName=stack_id)
+         for resource in resources['StackResources']:
+             for field in ["ResourceType", "PhysicalResourceId", "LogicalResourceId", "ResourceStatus"]:
+               if field in resource:
+                  print(resource[field]),
+             print
+         print("\nSTATUS: " + stack_state)
+         break
+      time.sleep(2)
 
 if __name__ == "__main__":
-	main(sys.argv[1:])
+   main(sys.argv[1:])

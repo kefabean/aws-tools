@@ -1,0 +1,87 @@
+{
+   "AWSTemplateFormatVersion" : "2010-09-09",
+
+   "Description" : "IAM group and policies to enable MFA",
+
+   "Parameters" : {
+      "Region"             : { "Description" : "Region", "Type": "String" },
+      "Service"            : { "Description" : "Service", "Type": "String" },
+      "Environment"        : { "Description" : "Environment", "Type": "String" },
+      "Component"          : { "Description" : "Component", "Type": "String" },
+      "MultiFactorAuthAge" : { "Description" : "Maximum age of temporary MFA credentials in seconds", "Type": "Number" }
+   },
+   "Resources" : {
+      "ManageMfaPolicy" : {
+         "Type": "AWS::IAM::Policy",
+         "Properties": {
+            "PolicyName" : "ManageMfaPolicy",
+            "PolicyDocument" : {
+               "Version": "2012-10-17",
+               "Statement": [
+                  {
+                     "Sid": "AllowCreateEnableResyncMfaDevice",
+                     "Effect": "Allow",
+                     "Action": [
+                        "iam:CreateVirtualMFADevice",
+                        "iam:EnableMFADevice",
+                        "iam:ResyncMFADevice"
+                     ],
+                     "Resource": [
+                        { "Fn::Join": ["", [ "arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":mfa/${aws:username}" ] ] },
+                        { "Fn::Join": ["", [ "arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":user/${aws:username}" ] ] }
+                     ]
+                  },
+                  {
+                     "Sid": "AllowDeactivateDeleteMfaDevice",
+                     "Effect": "Allow",
+                     "Action": [
+                        "iam:DeactivateMFADevice",
+                        "iam:DeleteVirtualMFADevice"
+                     ],
+                     "Resource": [
+                        { "Fn::Join": ["", [ "arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":mfa/${aws:username}" ] ] },
+                        { "Fn::Join": ["", [ "arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":user/${aws:username}" ] ] }
+                     ],
+                     "Condition": { "NumericLessThan":{"aws:MultiFactorAuthAge":{ "Ref": "MultiFactorAuthAge" }} }
+                  },
+                  {
+                     "Sid": "AllowListMfaDevices",
+                     "Effect": "Allow",
+                     "Action": [
+                        "iam:ListMFADevices",
+                        "iam:ListVirtualMFADevices",
+                        "iam:ListUsers"
+                     ],
+                     "Resource": "*"
+                  }
+               ]
+            },
+            "Groups" : [ { "Ref" : "MfaAdminGroup" } ]
+         }
+      },
+      "MfaAdminPolicy" : {
+         "Type": "AWS::IAM::Policy",
+         "Properties": {
+            "PolicyName" : "MfaAdminPolicy",
+            "PolicyDocument" : {
+               "Version": "2012-10-17",
+               "Statement": [
+                  {
+                     "Effect": "Allow",
+                     "Action": "*",
+                     "Resource": "*",
+                     "Condition": { "NumericLessThan":{"aws:MultiFactorAuthAge":{ "Ref": "MultiFactorAuthAge" } } }
+                  }
+               ]
+            },
+            "Groups" : [ { "Ref" : "MfaAdminGroup" } ]
+         }
+      },
+      "MfaAdminGroup" : {
+         "Type" : "AWS::IAM::Group",
+         "Properties" : {
+            "Path" : "/admin/"
+         }
+      }
+   }
+}

@@ -1,0 +1,8 @@
+[
+   { "ParameterKey" : "Region",             "ParameterValue" : "global" },
+   { "ParameterKey" : "Service",            "ParameterValue" : "mfa" },
+   { "ParameterKey" : "Environment",        "ParameterValue" : "shared" },
+   { "ParameterKey" : "MultiFactorAuthAge", "ParameterValue" : "28800" },
+   { "ParameterKey" : "Component",          "ParameterValue" : "iam" }
+]
+
