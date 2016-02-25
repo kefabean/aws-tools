@@ -32,19 +32,6 @@
                      ]
                   },
                   {
-                     "Sid": "AllowDeactivateDeleteMfaDevice",
-                     "Effect": "Allow",
-                     "Action": [
-                        "iam:DeactivateMFADevice",
-                        "iam:DeleteVirtualMFADevice"
-                     ],
-                     "Resource": [
-                        { "Fn::Join": ["", [ "arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":mfa/${aws:username}" ] ] },
-                        { "Fn::Join": ["", [ "arn:aws:iam::", { "Ref": "AWS::AccountId" }, ":user/${aws:username}" ] ] }
-                     ],
-                     "Condition": { "NumericLessThan":{"aws:MultiFactorAuthAge":{ "Ref": "MultiFactorAuthAge" }} }
-                  },
-                  {
                      "Sid": "AllowListMfaDevices",
                      "Effect": "Allow",
                      "Action": [
