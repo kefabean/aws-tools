@@ -151,6 +151,14 @@ def main(argv):
                if field in resource:
                   print(resource[field]),
              print
+         if "Outputs" in stack['Stacks'][0]:
+            outputs = stack['Stacks'][0]['Outputs']
+            print("\nOUTPUTS:\n")
+            for output in outputs:
+               for field in ["OutputKey", "OutputValue", "Description"]:
+                  if field in output:
+                     print(output[field] + " "),
+               print
          print("\nSTATUS: " + stack_state)
          break
       time.sleep(2)
