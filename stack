@@ -160,7 +160,10 @@ def main(argv):
                      print(output[field] + " "),
                print
          print("\nSTATUS: " + stack_state)
-         break
+         if "FAILED" in stack_state or "ROLLBACK" in stack_state:
+            sys.exit(2)
+         else:
+            sys.exit(0)
       time.sleep(2)
 
 if __name__ == "__main__":
