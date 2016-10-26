@@ -4,28 +4,30 @@ from __future__ import print_function
 import json, sys, getopt, urllib2, ssl
 
 offer_codes = {
-	"AmazonEC2" : {
-		"productFamily" : "Compute Instance",
-		"attributes" : [ "instanceType", "operatingSystem", "licenseModel" ]
-	},
-	"AmazonRDS" : {
-		"productFamily" : "Database Instance",
-		"attributes" : [ "instanceType", "databaseEngine", "licenseModel" ]
-	}
+   "AmazonEC2" : {
+      "productFamily" : "Compute Instance",
+      "attributes" : [ "instanceType", "operatingSystem", "licenseModel" ]
+   },
+   "AmazonRDS" : {
+      "productFamily" : "Database Instance",
+      "attributes" : [ "instanceType", "databaseEngine", "licenseModel" ]
+   }
 }
 
 region = {
-	"Asia Pacific (Seoul)":"ap-northeast-2",
-	"Asia Pacific (Singapore)":"ap-southeast-1",
-	"Asia Pacific (Sydney)":"ap-southeast-2",
-	"Asia Pacific (Tokyo)":"ap-northeast-1",
-	"AWS GovCloud (US)":"us-gov-1",
-	"EU (Frankfurt)":"eu-central-1",
-	"EU (Ireland)":"eu-west-1",
-	"South America (Sao Paulo)":"sa-east-1",
-	"US East (N. Virginia)":"us-east-1",
-	"US West (N. California)":"us-west-1",
-	"US West (Oregon)":"us-west-2"
+   "Asia Pacific (Seoul)":"ap-northeast-2",
+   "Asia Pacific (Singapore)":"ap-southeast-1",
+   "Asia Pacific (Sydney)":"ap-southeast-2",
+   "Asia Pacific (Tokyo)":"ap-northeast-1",
+   "AWS GovCloud (US)":"us-gov-1",
+   "EU (Frankfurt)":"eu-central-1",
+   "EU (Ireland)":"eu-west-1",
+   "South America (Sao Paulo)":"sa-east-1",
+   "US East (N. Virginia)":"us-east-1",
+   "US West (N. California)":"us-west-1",
+   "US West (Oregon)":"us-west-2",
+   "Asia Pacific (Mumbai)":"ap-south-1",
+   "US East (Ohio)":"us-east-2"
 }
 
 def chunk_report(bytes_so_far, chunk_size, total_size):
@@ -37,87 +39,89 @@ def chunk_report(bytes_so_far, chunk_size, total_size):
       sys.stderr.write('\n')
 
 def chunk_read(response, chunk_size=8192, report_hook=None):
-	data = ""
-	total_size = response.info().getheader('Content-Length').strip()
-	total_size = int(total_size)
-	bytes_so_far = 0
-	while 1:
-		chunk = response.read(chunk_size)
-		bytes_so_far += len(chunk)
-		data += chunk
-		if not chunk:
-			break
-		if report_hook:
-			report_hook(bytes_so_far, chunk_size, total_size)
-	return data
+   data = ""
+   total_size = response.info().getheader('Content-Length').strip()
+   total_size = int(total_size)
+   bytes_so_far = 0
+   while 1:
+      chunk = response.read(chunk_size)
+      bytes_so_far += len(chunk)
+      data += chunk
+      if not chunk:
+         break
+      if report_hook:
+         report_hook(bytes_so_far, chunk_size, total_size)
+   return data
 
 def display_output(attr, term, offer, term_type):
-	
-	if term_type == "Reserved" and not(
-			"termAttributes" in term and 
-			term['termAttributes']['LeaseContractLength'] == "1yr" and 
-			term['termAttributes']['PurchaseOption'] == "All Upfront"):
-		return
-	elif offer == "AmazonEC2" and attr['tenancy'] == "Dedicated":
-		return
+   
+   if term_type == "Reserved" and not(
+         "termAttributes" in term and 
+         term['termAttributes']['LeaseContractLength'] == "1yr" and (
+            term['termAttributes']['PurchaseOption'] == "All Upfront" or
+            term['termAttributes']['PurchaseOption'] == "No Upfront"
+         )):
+      return
+   elif offer == "AmazonEC2" and attr['tenancy'] == "Dedicated":
+      return
 
-	price = float(0)
-	for price_dimension in term['priceDimensions'].values():
-		if price_dimension['unit'].lower() == "quantity":
-			price += float(price_dimension['pricePerUnit']['USD'])/(365*24)
-		else: 
-			price += float(price_dimension['pricePerUnit']['USD'])
-	if price == 0:
-		return
+   price = float(0)
+   for price_dimension in term['priceDimensions'].values():
+      if price_dimension['unit'].lower() == "quantity":
+         price += float(price_dimension['pricePerUnit']['USD'])/(365*24)
+      else: 
+         price += float(price_dimension['pricePerUnit']['USD'])
+   if price == 0:
+      return
 
-	if offer == "AmazonEC2":
-		print( 
-			region[attr['location']],",",
-			attr['instanceType'],",",
-			attr['operatingSystem'],",",
-			attr['licenseModel'],",",
-			term_type,",",
-			attr['vcpu'],",",
-			attr['memory'],",",
-			attr['networkPerformance'],",",
-			price,sep="")
-	elif offer == "AmazonRDS":
-		if "databaseEdition" in attr:
-			databaseEdition = attr['databaseEdition'] + " "
-		else:
-			databaseEdition = ""
-		print( 
-			region[attr['location']],",",
-			attr['instanceType'],",",
-			attr['databaseEngine']," ",
-			databaseEdition,
-			attr['deploymentOption'],",",
-			attr['licenseModel'],",",
-			term_type,",",
-			attr['vcpu'],",",
-			attr['memory'],",",
-			attr['networkPerformance'],",",
-			price, sep="")
-	return
+   if offer == "AmazonEC2":
+      print( 
+         region[attr['location']],",",
+         attr['instanceType'],",",
+         attr['operatingSystem']," (",
+         attr['licenseModel'],"),",
+         term_type,",",
+         attr['vcpu'],",",
+         attr['memory'],",",
+         attr['networkPerformance'],",",
+         price,sep="")
+   elif offer == "AmazonRDS":
+      if "databaseEdition" in attr:
+         databaseEdition = attr['databaseEdition'] + " "
+      else:
+         databaseEdition = ""
+      print( 
+         region[attr['location']],",",
+         attr['instanceType'],",",
+         attr['databaseEngine']," ",
+         databaseEdition,
+         attr['deploymentOption']," (",
+         attr['licenseModel'],"),",
+         term_type,",",
+         attr['vcpu'],",",
+         attr['memory'],",",
+         attr['networkPerformance'],",",
+         price, sep="")
+   return
 
 def main(argv):
-	for offer in offer_codes:
-		product_family = offer_codes[offer]['productFamily']
-		print("Downloading " + offer + " pricing data for " + offer_codes[offer]['productFamily'] , file=sys.stderr)
-		url = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/" + \
-			offer + "/current/index.json"
-		response = urllib2.urlopen(url)
-		data = json.loads(chunk_read(response, report_hook=chunk_report))
-		#data = json.load(open(offer))
-		products = data['products']
-		for product_key, product in products.iteritems():
-			if "productFamily" in product and \
-					"attributes" in product and \
-					product_family in product['productFamily']:
-				for term_type, terms in data['terms'].iteritems():
-					if product_key in terms:
-						for term in terms[product_key].values():
-								display_output(product['attributes'], term, offer, term_type)
-							
+   for offer in offer_codes:
+      product_family = offer_codes[offer]['productFamily']
+      print("Downloading " + offer + " pricing data for " + offer_codes[offer]['productFamily'] , file=sys.stderr)
+      url = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/" + \
+         offer + "/current/index.json"
+      response = urllib2.urlopen(url)
+      data = json.loads(chunk_read(response, report_hook=chunk_report))
+      #data = json.load(open(offer))
+      products = data['products']
+      for product_key, product in products.iteritems():
+         if "productFamily" in product and \
+               "attributes" in product and \
+               product_family in product['productFamily']:
+            for term_type, terms in data['terms'].iteritems():
+               if product_key in terms:
+                  for term in terms[product_key].values():
+                        display_output(product['attributes'], term, offer, term_type)
+                     
 if __name__ == "__main__":
-	main(sys.argv[1:])
+   main(sys.argv[1:])
