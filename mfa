@@ -92,6 +92,7 @@ def main(argv):
    boto.config.save_option(home + "/.aws/credentials", profile_mfa, "aws_access_key_id", sts_token.access_key)
    boto.config.save_option(home + "/.aws/credentials", profile_mfa, "aws_secret_access_key", sts_token.secret_key)
    boto.config.save_option(home + "/.aws/credentials", profile_mfa, "aws_security_token", sts_token.session_token)
+   boto.config.save_option(home + "/.aws/credentials", profile_mfa, "expiration", sts_token.expiration)
    
    print "Your temporary credentials have been updated in ~/.aws/credentials. Please use '" + profile_mfa + "' as your profile name for aws cli commands."
 
