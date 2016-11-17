@@ -1,0 +1,11 @@
+#!/usr/bin/python3
+import json, yaml, sys
+
+file_name_in = sys.argv[1]
+file_in = open(file_name_in, 'r')
+
+tmp = json.load(file_in)
+
+file_name_out = file_name_in.replace(".json", ".yml")
+file_out = open(file_name_out, 'w')
+file_out.write(yaml.dump(tmp))
