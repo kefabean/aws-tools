@@ -1,7 +1,7 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
-from __future__ import print_function
-import json, sys, getopt, urllib2, ssl
+import json, sys, getopt, urllib.request, ssl
+
 
 offer_codes = {
    "AmazonEC2" : {
@@ -38,22 +38,24 @@ def chunk_report(bytes_so_far, chunk_size, total_size):
    if bytes_so_far >= total_size:
       sys.stderr.write('\n')
 
+
 def chunk_read(response, chunk_size=8192, report_hook=None):
    data = ""
-   total_size = response.info().getheader('Content-Length').strip()
+   total_size = response.getheader('Content-Length').strip()
    total_size = int(total_size)
    bytes_so_far = 0
    while 1:
       chunk = response.read(chunk_size)
       bytes_so_far += len(chunk)
-      data += chunk
+      data += str(chunk, 'utf8')
       if not chunk:
          break
       if report_hook:
          report_hook(bytes_so_far, chunk_size, total_size)
    return data
 
-def display_output(attr, term, offer, term_type):
+
+def get_output(attr, term, offer, term_type):
    
    if term_type == "Reserved" and not(
          "termAttributes" in term and 
@@ -74,54 +76,78 @@ def display_output(attr, term, offer, term_type):
    if price == 0:
       return
 
+   if attr.get('preInstalledSw', 'NA') != 'NA':
+      return
+
    if offer == "AmazonEC2":
-      print( 
-         region[attr['location']],",",
-         attr['instanceType'],",",
-         attr['operatingSystem']," (",
-         attr['licenseModel'],"),",
-         term_type,",",
-         attr['vcpu'],",",
-         attr['memory'],",",
-         attr['networkPerformance'],",",
-         price,sep="")
+      fields = [
+         region[attr['location']],
+         attr['instanceType'],
+         attr['operatingSystem'] + " (" +
+         attr['licenseModel'] + ")",
+         term_type,
+         attr['vcpu'],
+         attr['memory'],
+         attr['networkPerformance']
+         ]
    elif offer == "AmazonRDS":
-      if "databaseEdition" in attr:
-         databaseEdition = attr['databaseEdition'] + " "
-      else:
-         databaseEdition = ""
-      print( 
-         region[attr['location']],",",
-         attr['instanceType'],",",
-         attr['databaseEngine']," ",
-         databaseEdition,
-         attr['deploymentOption']," (",
-         attr['licenseModel'],"),",
-         term_type,",",
-         attr['vcpu'],",",
-         attr['memory'],",",
-         attr['networkPerformance'],",",
-         price, sep="")
-   return
+      fields = [
+         region[attr['location']],
+         attr['instanceType'],
+         attr['databaseEngine'] + " " +
+         attr.get('databaseEdition', "") + " " + 
+         attr['deploymentOption'] + " (" +
+         attr['licenseModel'] + ")",
+         term_type,
+         attr['vcpu'],
+         attr['memory'],
+         attr['networkPerformance']
+         ]
+
+   return fields, attr, price
+
 
 def main(argv):
    for offer in offer_codes:
       product_family = offer_codes[offer]['productFamily']
-      print("Downloading " + offer + " pricing data for " + offer_codes[offer]['productFamily'] , file=sys.stderr)
-      url = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/" + \
-         offer + "/current/index.json"
-      response = urllib2.urlopen(url)
-      data = json.loads(chunk_read(response, report_hook=chunk_report))
-      #data = json.load(open(offer))
+      if '-f' not in argv:
+         print("Downloading " + offer + " pricing data for " + offer_codes[offer]['productFamily'] , file=sys.stderr)
+         url = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/" + \
+            offer + "/current/index.json"
+         response = urllib.request.urlopen(url)
+         data = json.loads(chunk_read(response, report_hook=chunk_report))
+      else:
+         data = json.load(open(offer + ".json"))
       products = data['products']
-      for product_key, product in products.iteritems():
+      variants = {}
+      for product_key, product in products.items():
          if "productFamily" in product and \
                "attributes" in product and \
                product_family in product['productFamily']:
-            for term_type, terms in data['terms'].iteritems():
+            for term_type, terms in data['terms'].items():
                if product_key in terms:
                   for term in terms[product_key].values():
-                        display_output(product['attributes'], term, offer, term_type)
+                     output = get_output(product['attributes'], term, offer, term_type) 
+                     if output is not None:
+                        fields, attr, price = output
+                        key = repr(fields)
+                        attr['price'] = price
+                        if key not in variants:
+                           variants[key] = attr 
+                           fields.append(price)
+                           print(*fields, sep=",")
+                        else:
+                           sys.stderr.write("The following duplicate output has already been displayed: {0}".format(key))
+                           sys.stderr.write("\n\nDetail of original:\n\n")
+                           sys.stderr.write(json.dumps(variants[key], indent=2))
+                           sys.stderr.write("\n\nDetail of duplicate:\n\n")
+                           sys.stderr.write(json.dumps(attr, indent=2))
+                           sys.stderr.write("\n\n")
+                           if attr['price'] == variants[key]['price']:
+                              sys.stderr.write("\n\nNo price difference, ignoring duplicate entry\n\n")
+                           else:
+                              sys.stderr.write("\n\nERROR: Fatal error, price discrepancy detected for identical output fields\n\n")
+                              sys.exit(2)
                      
 if __name__ == "__main__":
    main(sys.argv[1:])
