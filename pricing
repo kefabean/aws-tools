@@ -30,6 +30,7 @@ region = {
    "US East (Ohio)":"us-east-2"
 }
 
+
 def chunk_report(bytes_so_far, chunk_size, total_size):
    percent = float(bytes_so_far) / total_size
    percent = round(percent*100, 2)
@@ -59,10 +60,9 @@ def get_output(attr, term, offer, term_type):
    
    if term_type == "Reserved" and not(
          "termAttributes" in term and 
-         term['termAttributes']['LeaseContractLength'] == "1yr" and (
-            term['termAttributes']['PurchaseOption'] == "All Upfront" or
-            term['termAttributes']['PurchaseOption'] == "No Upfront"
-         )):
+         term['termAttributes']['LeaseContractLength'] == "1yr" and
+            term['termAttributes']['PurchaseOption'] == "All Upfront"
+         ):
       return
    elif offer == "AmazonEC2" and attr['tenancy'] == "Dedicated":
       return
@@ -77,7 +77,7 @@ def get_output(attr, term, offer, term_type):
       return
 
    if attr.get('preInstalledSw', 'NA') != 'NA':
-      return
+    return
 
    if offer == "AmazonEC2":
       fields = [
@@ -104,7 +104,7 @@ def get_output(attr, term, offer, term_type):
          attr['networkPerformance']
          ]
 
-   return fields, attr, price
+   return [field.replace(",", "") for field in fields], attr, str(price)
 
 
 def main(argv):
@@ -117,7 +117,8 @@ def main(argv):
          response = urllib.request.urlopen(url)
          data = json.loads(chunk_read(response, report_hook=chunk_report))
       else:
-         data = json.load(open(offer + ".json"))
+         with open(offer + ".json", 'r') as f:
+            data = json.loads(f.read())
       products = data['products']
       variants = {}
       for product_key, product in products.items():
@@ -125,29 +126,22 @@ def main(argv):
                "attributes" in product and \
                product_family in product['productFamily']:
             for term_type, terms in data['terms'].items():
-               if product_key in terms:
+               if product_key in terms.keys():
                   for term in terms[product_key].values():
                      output = get_output(product['attributes'], term, offer, term_type) 
                      if output is not None:
-                        fields, attr, price = output
-                        key = repr(fields)
-                        attr['price'] = price
-                        if key not in variants:
-                           variants[key] = attr 
+                        fields, metadata, price = output
+                        metadata.update({'price':price})
+                        key = ','.join(fields).lower().strip()
+                        if key in variants.keys():
+                           sys.stderr.write("\n\nOriginal attributes:\n\n{0}".format(variants[key]))
+                           sys.stderr.write("\n\nNew attributes:\n\n{0}".format(metadata))
+                           sys.stderr.write("\n\nERROR: Fatal error, price discrepancy detected for identical output fields\n\n")
+                           sys.exit(2)
+                        else:
+                           variants.update({key:metadata})
                            fields.append(price)
                            print(*fields, sep=",")
-                        else:
-                           sys.stderr.write("The following duplicate output has already been displayed: {0}".format(key))
-                           sys.stderr.write("\n\nDetail of original:\n\n")
-                           sys.stderr.write(json.dumps(variants[key], indent=2))
-                           sys.stderr.write("\n\nDetail of duplicate:\n\n")
-                           sys.stderr.write(json.dumps(attr, indent=2))
-                           sys.stderr.write("\n\n")
-                           if attr['price'] == variants[key]['price']:
-                              sys.stderr.write("\n\nNo price difference, ignoring duplicate entry\n\n")
-                           else:
-                              sys.stderr.write("\n\nERROR: Fatal error, price discrepancy detected for identical output fields\n\n")
-                              sys.exit(2)
-                     
+
 if __name__ == "__main__":
    main(sys.argv[1:])
