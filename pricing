@@ -80,34 +80,45 @@ def get_output(attr, term, offer, term_type):
     return
 
    if offer == "AmazonEC2":
-      fields = [
+      key_fields = [
          region[attr['location']],
          attr['instanceType'],
          attr['operatingSystem'] + " (" +
          attr['licenseModel'] + ")",
-         term_type,
-         attr['vcpu'],
-         attr['memory'],
-         attr['networkPerformance']
+         term_type
          ]
    elif offer == "AmazonRDS":
-      fields = [
+      key_fields = [
          region[attr['location']],
          attr['instanceType'],
          attr['databaseEngine'] + " " +
          attr.get('databaseEdition', "") + " " + 
          attr['deploymentOption'] + " (" +
          attr['licenseModel'] + ")",
-         term_type,
-         attr['vcpu'],
-         attr['memory'],
-         attr['networkPerformance']
+         term_type
          ]
+   key = '-'.join(key_fields).lower().strip().replace(" ", "")
+   fields = [field.replace(",", "") for field in key_fields]
+   fields.extend([
+      attr['vcpu'],
+      attr['memory'],
+      attr['networkPerformance']])
 
-   return [field.replace(",", "") for field in fields], attr, str(price)
+   return fields, key, attr, price
 
 
 def main(argv):
+   print(
+      "Lookup Reference",
+      "Region",
+      "Instance Type",
+      "Flavour",
+      "Pricing",
+      "CPUs",
+      "Memory",
+      "Network",
+      "Effective Hourly Rate ($)",
+      sep=",")
    for offer in offer_codes:
       product_family = offer_codes[offer]['productFamily']
       if '-f' not in argv:
@@ -130,16 +141,16 @@ def main(argv):
                   for term in terms[product_key].values():
                      output = get_output(product['attributes'], term, offer, term_type) 
                      if output is not None:
-                        fields, metadata, price = output
-                        metadata.update({'price':price})
-                        key = ','.join(fields).lower().strip()
+                        fields, key, attr, price = output
+                        attr.update({'price':price})
                         if key in variants.keys():
                            sys.stderr.write("\n\nOriginal attributes:\n\n{0}".format(variants[key]))
-                           sys.stderr.write("\n\nNew attributes:\n\n{0}".format(metadata))
+                           sys.stderr.write("\n\nNew attributes:\n\n{0}".format(attr))
                            sys.stderr.write("\n\nERROR: Fatal error, price discrepancy detected for identical output fields\n\n")
                            sys.exit(2)
                         else:
-                           variants.update({key:metadata})
+                           variants.update({key:attr})
+                           fields.insert(0,key)
                            fields.append(price)
                            print(*fields, sep=",")
 
