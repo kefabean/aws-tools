@@ -15,7 +15,8 @@ def usage():
    print
    print "Uses credentials stored in PROFILE and an MFA device associated with the"
    print "corresponding AWS user to generate temporary credentials in profile [PROFILE]-mfa"
-   print "for command line and boto API access. The following options are used to set the username,"
+   print "for command line and the [default] profile is updated simultaneously for boto API access."
+   print "The following options are used to set the username,"
    print "account, and region associated to be associated with the temporary credentials."  
    print
    print "-h, --help       display this message"
@@ -81,6 +82,7 @@ def main(argv):
       usage()
       sys.exit(2)
 
+   print "\nNOTE: Credentials in [default] and [" + profile_mfa + "] profiles will be overwritten\n"
    mfa_token = getpass.getpass("Enter 6-digit MFA token: ")
    mfa_serial_number = "arn:aws:iam::" + account_number + ":mfa/" + username
    
@@ -89,12 +91,13 @@ def main(argv):
    sts_token = sts_conn.get_session_token(duration=28800, mfa_serial_number=mfa_serial_number, mfa_token=mfa_token)
    
    # save temporary credentials to profile with -mfa suffix
-   boto.config.save_option(home + "/.aws/credentials", profile_mfa, "aws_access_key_id", sts_token.access_key)
-   boto.config.save_option(home + "/.aws/credentials", profile_mfa, "aws_secret_access_key", sts_token.secret_key)
-   boto.config.save_option(home + "/.aws/credentials", profile_mfa, "aws_security_token", sts_token.session_token)
-   boto.config.save_option(home + "/.aws/credentials", profile_mfa, "expiration", sts_token.expiration)
+   for p in [ profile_mfa, "default" ]:
+      boto.config.save_option(home + "/.aws/credentials", p, "aws_access_key_id", sts_token.access_key)
+      boto.config.save_option(home + "/.aws/credentials", p, "aws_secret_access_key", sts_token.secret_key)
+      boto.config.save_option(home + "/.aws/credentials", p, "aws_security_token", sts_token.session_token)
+      boto.config.save_option(home + "/.aws/credentials", p, "expiration", sts_token.expiration)
    
-   print "Your temporary credentials have been updated in ~/.aws/credentials. Please use '" + profile_mfa + "' as your profile name for aws cli commands."
+   print "Temporary credentials updated in [default] and [" + profile_mfa + "] profiles in ~/.aws/credentials"
 
 if __name__ == "__main__":
    main(sys.argv[1:])
