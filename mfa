@@ -13,15 +13,15 @@ def usage():
    print
    print "Usage: mfa [OPTION] PROFILE"
    print
-   print "Uses credentials stored in PROFILE and an MFA device associated with the"
-   print "corresponding AWS user to generate temporary credentials in profile [PROFILE]-mfa"
-   print "for command line and the [default] profile is updated simultaneously for boto API access."
-   print "The following options are used to set the username,"
-   print "account, and region associated to be associated with the temporary credentials."  
+   print "Uses access key and secret key, AWS username, and account number, stored in PROFILE" 
+   print "to generate temporary credentials that are stored in the '[PROFILE]-mfa' profile"
+   print "for AWSCLI access. The 'default' profile is updated simultaneously for boto API access."
+   print "The following options are used to set the username, account and default region"
+   print "which are used to identify the MFA device being used to generate th 6-digit one time code:"
    print
    print "-h, --help       display this message"
-   print "-u, --user       set AWS user with MFA device to generate credentials in PROFILE-mfa"
-   print "-a, --account    set AWS account number for temporary credentials in PROFILE-mfa"
+   print "-u, --user       set AWS user with MFA device to generate credentials in PROFILE"
+   print "-a, --account    set AWS account number for temporary credentials in PROFILE"
    print "-r, --region     set region to use with temporary credentials in PROFILE-mfa"
    print
 
@@ -66,15 +66,15 @@ def main(argv):
          usage()
          sys.exit()
       elif opt in ("-u", "--user"):
-         boto.config.save_option(home + "/.aws/credentials", profile_mfa, "username", arg)
+         boto.config.save_option(home + "/.aws/credentials", profile, "username", arg)
       elif opt in ("-a", "--account"):
-         boto.config.save_option(home + "/.aws/credentials", profile_mfa, "account_number", arg)
+         boto.config.save_option(home + "/.aws/credentials", profile, "account_number", arg)
       elif opt in ("-r", "--region"):
-         boto.config.save_option(home + "/.aws/credentials", profile_mfa, "region", arg)
+         boto.config.save_option(home + "/.aws/credentials", profile, "region", arg)
 
-   username = boto.config.get(profile_mfa, "username")
-   account_number = boto.config.get(profile_mfa, "account_number")
-   region = boto.config.get(profile_mfa, "region")
+   username = boto.config.get(profile, "username")
+   account_number = boto.config.get(profile, "account_number")
+   region = boto.config.get(profile, "region")
    
    if (username == None) or (account_number == None) or (region == None):
       print
@@ -96,6 +96,10 @@ def main(argv):
       boto.config.save_option(home + "/.aws/credentials", p, "aws_secret_access_key", sts_token.secret_key)
       boto.config.save_option(home + "/.aws/credentials", p, "aws_security_token", sts_token.session_token)
       boto.config.save_option(home + "/.aws/credentials", p, "expiration", sts_token.expiration)
+      boto.config.save_option(home + "/.aws/credentials", p, "region", region)
+      boto.config.save_option(home + "/.aws/credentials", p, "account_number", account_number)
+      boto.config.save_option(home + "/.aws/credentials", p, "username", username)
+
    
    print "Temporary credentials updated in [default] and [" + profile_mfa + "] profiles in ~/.aws/credentials"
 
