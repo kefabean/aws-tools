@@ -27,7 +27,9 @@ region = {
    "US West (N. California)":"us-west-1",
    "US West (Oregon)":"us-west-2",
    "Asia Pacific (Mumbai)":"ap-south-1",
-   "US East (Ohio)":"us-east-2"
+   "US East (Ohio)":"us-east-2",
+   "Canada (Central)":"ca-central-1",
+   "EU (London)":"eu-west-2"
 }
 
 
@@ -98,11 +100,11 @@ def get_output(attr, term, offer, term_type):
          term_type
          ]
    key = '-'.join(key_fields).lower().strip().replace(" ", "")
-   fields = [field.replace(",", "") for field in key_fields]
-   fields.extend([
+   key_fields.extend([
       attr['vcpu'],
       attr['memory'],
       attr['networkPerformance']])
+   fields = [field.replace(",", "") for field in key_fields]
 
    return fields, key, attr, price
 
