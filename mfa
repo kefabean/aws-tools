@@ -1,64 +1,73 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
-import boto
-import sys, getopt
-import getpass
-from boto import sts
-from boto import config
+import boto3, sys, getopt, getpass, configparser
 from os.path import expanduser
 
 home = expanduser("~")
+aws_creds = home + "/.aws/credentials"
 
 def usage():
-   print
-   print "Usage: mfa [OPTION] PROFILE"
-   print
-   print "Uses access key and secret key, AWS username, and account number, stored in PROFILE" 
-   print "to generate temporary credentials that are stored in the '[PROFILE]-mfa' profile"
-   print "for AWSCLI access. The 'default' profile is updated simultaneously for boto API access."
-   print "The following options are used to set the username, account and default region"
-   print "which are used to identify the MFA device being used to generate th 6-digit one time code:"
-   print
-   print "-h, --help       display this message"
-   print "-u, --user       set AWS user with MFA device to generate credentials in PROFILE"
-   print "-a, --account    set AWS account number for temporary credentials in PROFILE"
-   print "-r, --region     set region to use with temporary credentials in PROFILE-mfa"
-   print
+   print(
+      "Usage: mfa [OPTIONS] PROFILE\n\n"
+      "Uses permanent access key and secret key stored in "
+      "[PROFILE] within " + aws_creds + " file to generate temporary\n"
+      "credentials in '[PROFILE]-mfa' for AWSCLI/SDK access.\n\n"
+      "   -h, --help             display this message\n"
+      "   -u, --user             set name of AWS user associated with MFA device\n"
+      "   -a, --account          set AWS account number to request temporary credentials from\n"
+      "   -t, --target-account   set target AWS account to assume role in\n"
+      "   -n, --role-name        set role name to assume in target account \n"
+      "   -r, --region           set default region to associate with temporary credentials\n"
+   )
 
 def main(argv):
 
    try:
-      opts, args = getopt.getopt(argv, "hu:a:r:", ["user=", "account=", "region="])
+      opts, args = getopt.getopt(
+         argv,
+         "hu:a:r:n:t:p:",
+         [
+            "user=",
+            "account=",
+            "region=",
+            "role-name=",
+            "target-account=",
+            "profile="
+         ]
+      )
    except getopt.GetoptError:
       usage()
       sys.exit(2)
 
-   if (len(args) > 1) or (len(args) == 0):
+   if len(args) != 1:
       usage()
+      print("ERROR: Profile not specified\n")
       sys.exit(2)
 
    profile = args[0]
    profile_mfa = profile + "-mfa"
 
-   if ( profile[-3:] == 'mfa' ):
-      print
-      print "ERROR: please provide profile base name without '-mfa' suffix"
-      print
-      sys.exit(2)
+   conf = {
+      "username" : None,
+      "account_number" : None,
+      "region" : None,
+      "target_account" : None,
+      "role_name" : None
+   }
 
+   config = configparser.ConfigParser()
+   config.read(aws_creds)
    try:
-      boto.config.load_from_path(home + "/.aws/credentials")
-   except IOError as e:
-      print
-      print "ERROR: " + home + "/.aws/credentials cannot be read, please make sure this is set with 'aws configure --profile [PROFILE]'"
-      print 
-      sys.exit(2)
-
-   if ( not boto.config.has_section(profile) ):
-      print "ERROR: profile '" + profile + "' does not exist, please set with 'aws configure --profile [PROFILE]'"
-      sys.exit(2)
-   if ( not boto.config.has_option(profile, "aws_access_key_id") ) or ( not boto.config.has_option(profile, "aws_secret_access_key") ):
-      print "ERROR: credentials do not exist for profile '" + profile + "', please set with 'aws configure --profile [PROFILE]'"
+      for c in conf: 
+         conf[c] = config.get(profile, c)
+   except configparser.NoOptionError as e:
+      print(repr(e) + ", using command line parameters")
+   except configparser.NoSectionError as e:
+      print(
+         "\nERROR: " + repr(e) + " found in " + aws_creds +
+         " or file not found, please configure profile using "
+         "'aws configure --profile " + conf["profile"] + "'\n"
+      )
       sys.exit(2)
 
    for opt, arg in opts:
@@ -66,42 +75,79 @@ def main(argv):
          usage()
          sys.exit()
       elif opt in ("-u", "--user"):
-         boto.config.save_option(home + "/.aws/credentials", profile, "username", arg)
+         conf["username"] = arg
       elif opt in ("-a", "--account"):
-         boto.config.save_option(home + "/.aws/credentials", profile, "account_number", arg)
+         conf["account_number"] = str(arg)
       elif opt in ("-r", "--region"):
-         boto.config.save_option(home + "/.aws/credentials", profile, "region", arg)
+         conf["region"] = arg
+      elif opt in ("-n", "--role-name"):
+         conf["role_name"] = arg
+      elif opt in ("-t", "--target-account"):
+         conf["target_account"] = str(arg)
 
-   username = boto.config.get(profile, "username")
-   account_number = boto.config.get(profile, "account_number")
-   region = boto.config.get(profile, "region")
-   
-   if (username == None) or (account_number == None) or (region == None):
-      print
-      print "ERROR: username, account, or region not set"
+   if (conf['username'] == None) or \
+         (conf['account_number'] == None) or \
+         (conf['region'] == None):
       usage()
+      print("\nERROR: username, account, or region not set\n")
       sys.exit(2)
 
-   print "\nNOTE: Credentials in [default] and [" + profile_mfa + "] profiles will be overwritten\n"
+   print(
+      "\nINFO: Credentials in profile [" + profile_mfa +
+      "] will be overwritten\n"
+   )
    mfa_token = getpass.getpass("Enter 6-digit MFA token: ")
-   mfa_serial_number = "arn:aws:iam::" + account_number + ":mfa/" + username
+   mfa_serial_number = "arn:aws:iam::" + conf['account_number'] + ":mfa/" + conf['username']
    
    # get temporary credentials using long lived credentials and number generated from MFA device 
-   sts_conn = boto.sts.STSConnection(profile_name=profile)
-   sts_token = sts_conn.get_session_token(duration=28800, mfa_serial_number=mfa_serial_number, mfa_token=mfa_token)
+   session = boto3.Session(profile_name = profile)
+   sts = session.client("sts")
+   if conf['role_name']:
+      print(
+         "Assuming role '" + conf['role_name'] +
+         "' in remote account '" + conf['target_account'] + "'"
+      )
+   else:
+      print(
+         "Generating credentials for local account '" + 
+         conf['account_number'] + "'"
+      )
+      
+   if conf['role_name']:
+      response = sts.assume_role(
+         RoleArn = "arn:aws:iam::" + conf['target_account'] + ":role/" + conf['role_name'],
+         RoleSessionName = conf['role_name'] + conf['target_account'],
+         SerialNumber = mfa_serial_number,
+         TokenCode = mfa_token,
+         DurationSeconds = 3600
+      )
+   else: 
+   	response = sts.get_session_token(
+         DurationSeconds = 28800,
+         SerialNumber = mfa_serial_number,
+         TokenCode = mfa_token
+      )
+   sts_token = response['Credentials']
    
-   # save temporary credentials to profile with -mfa suffix
-   for p in [ profile_mfa, "default" ]:
-      boto.config.save_option(home + "/.aws/credentials", p, "aws_access_key_id", sts_token.access_key)
-      boto.config.save_option(home + "/.aws/credentials", p, "aws_secret_access_key", sts_token.secret_key)
-      boto.config.save_option(home + "/.aws/credentials", p, "aws_security_token", sts_token.session_token)
-      boto.config.save_option(home + "/.aws/credentials", p, "expiration", sts_token.expiration)
-      boto.config.save_option(home + "/.aws/credentials", p, "region", region)
-      boto.config.save_option(home + "/.aws/credentials", p, "account_number", account_number)
-      boto.config.save_option(home + "/.aws/credentials", p, "username", username)
+   # save config and temp credentials
+   try:
+      config.add_section(profile_mfa)
+   except configparser.DuplicateSectionError:
+      pass
+   config.set(profile_mfa, "aws_access_key_id", sts_token['AccessKeyId'])
+   config.set(profile_mfa, "aws_secret_access_key", sts_token['SecretAccessKey'])
+   config.set(profile_mfa, "aws_security_token", sts_token['SessionToken'])
+   config.set(profile_mfa, "expiration", str(sts_token['Expiration']))
+   for section in [ profile, profile_mfa ]:
+      for c in conf:
+         config.set(section, c, str(conf[c]))
+   with open(aws_creds, 'w') as configfile:
+      config.write(configfile)
 
-   
-   print "Temporary credentials updated in [default] and [" + profile_mfa + "] profiles in ~/.aws/credentials"
+   print(
+      "Temporary credentials updated in [" + profile_mfa +
+      "] profiles in ~/.aws/credentials"
+   )
 
 if __name__ == "__main__":
    main(sys.argv[1:])
