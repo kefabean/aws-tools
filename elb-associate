@@ -1,0 +1,53 @@
+#!/usr/bin/python3
+
+import sys, getopt, boto3, yaml, base64, re, time, string
+from os import listdir
+from os.path import isfile
+from botocore.exceptions import ClientError
+
+
+service = "testservice"
+
+
+def elb_ec2_attach(kwargs):
+   environment = kwargs['environment']
+   roles = kwargs['role'].split(",")
+   ec2 = boto3.client('ec2')
+   elb = boto3.client('elb')
+   for role in roles:
+      response = ec2.describe_instances(
+         Filters = [
+            {
+               'Name': "tag:Name", 
+               'Values' : [ service + "-" + environment + "-ec2-" + role + "-*" ]
+            }
+         ]
+      )
+      instances = [ { "InstanceId" :  i['InstanceId'] }
+         for r in response['Reservations'] for i in r['Instances'] ]
+      elb_name = service + "-" + environment + "-elb-" + role
+      response = elb.register_instances_with_load_balancer(
+         LoadBalancerName = elb_name,
+         Instances = instances
+      )
+      print("Associated " + str(len(instances)) +
+         " instances with load balancer: " + elb_name)
+
+
+def main(argv):
+   opts, args = getopt.getopt(argv, 'he:r:p:')
+   kwargs = {}
+   for opt, arg in opts:
+      if opt in ('-h'):
+         usage(0, "Please rerun with the appropriate parameters.")
+      elif opt in ('-e', '--environment'):
+         kwargs['environment'] = arg
+      elif opt in ('-r', '--role'):
+         kwargs['role'] = arg
+      elif opt in ('-p', '--profile'):
+         boto3.setup_default_session(profile_name=arg)
+   elb_ec2_attach(kwargs)
+
+
+if __name__ == '__main__':
+   main(sys.argv[1:])

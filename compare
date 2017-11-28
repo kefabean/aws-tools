@@ -1,0 +1,31 @@
+#!/usr/bin/python3
+
+import yaml, re
+from os import listdir
+
+
+pattern = re.compile("^[a-zA-Z]+\.yml$")
+
+files = [t for t in sorted(listdir()) if pattern.match(t)]
+print("Comparing configuration files: " + ", ".join(files))
+dicts = [ yaml.load(open(f, 'r').read()) for f in files ]
+indent = ""
+
+def recurse_dict(dicts, indent):
+   for d in dicts:
+      key_diff_dict = set(d.keys()) - set(dicts[0].keys())
+      key_diff_bool = bool(key_diff_dict)
+      key_diff_list = [ k for k in key_diff_dict ]
+      if key_diff_bool:
+         raise Exception(
+            "The following keys are mismatched between config files:\n " + 
+            '\n '.join(key_diff_list)
+      )
+   for k, v in dicts[0].items():
+      if isinstance(v, dict):
+         sub_dicts = [ d[k] for d in dicts ]  
+         recurse_dict(sub_dicts, indent + " " +  k)
+
+
+recurse_dict(dicts, indent)
+print("COMPLETED: Keys consistent across config files")

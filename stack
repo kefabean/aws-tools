@@ -1,170 +1,380 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
-import boto3
-import json
-import time
-import sys, getopt
-import getpass
-from boto import sts
-from boto import config
-from os.path import expanduser
+import sys, getopt, boto3, yaml, base64, re, time, string
+from os import listdir
+from os.path import isfile
+from botocore.exceptions import ClientError
 
-home = expanduser("~")
-required_params = ["Service", "Component",  "Environment", "Region"]
-output_fields = ["Timestamp", "ResourceStatus", "ResourceType", "LogicalResourceId", "ResourceStatusReason"]
-completed_states = ['CREATE_FAILED','CREATE_COMPLETE','ROLLBACK_FAILED','ROLLBACK_COMPLETE','DELETE_FAILED','DELETE_COMPLETE','UPDATE_COMPLETE','UPDATE_ROLLBACK_FAILED','UPDATE_ROLLBACK_COMPLETE']
 
-def usage(exit_code):
-   print
-   print "Usage:"
-   print "         stack -p <profile> create|update <profile> <template> <params>"
-   print "         stack -p <profile> delete <stackname>"
-   print
-   print "Creates or update CloudFormation stack using template and parameters files."
-   print
-   print "-h, --help      display this message"
-   print "-p, --profile      profile to use to access AWS"
-   print "create|update      action to create new or update existing CloudFormation stack"
-   print "<template>      filename of JSON CloudFormation template"
-   print "<params>      filename of JSON CloudFormation parameters"
-   print "<stackname>      name of stack to be deleted"
-   print
+completed_states = [
+   'CREATE_FAILED',
+   'CREATE_COMPLETE',
+   'ROLLBACK_FAILED',
+   'ROLLBACK_COMPLETE',
+   'DELETE_FAILED',
+   'DELETE_COMPLETE',
+   'UPDATE_COMPLETE',
+   'UPDATE_ROLLBACK_FAILED',
+   'UPDATE_ROLLBACK_COMPLETE'
+]
+
+
+def usage(exit_code, message):
+   print(
+      '\nDeploys CloudFormation templates in order conforming to the following'
+      '\nnaming convention relative to the current path:\n'
+      '\n./<service>/cloudformation/<pipeline>_<XXX>_<stack_type>.yml\n'
+      '\nwhere:\n'
+      '\n<pipeline> is a prefix grouping a set of templates and associated environments' 
+      '\n<XXX> is a zero padding sequence number that determines the order of deployment'
+      '\n   for a given environment/pipeline combination.'
+      '\n<stack_type> is the identifier for the stack (letters and hypens only eg. ec2-bst)\n'
+      '\nUsage:\n'
+      '\nUsage: ./deploy_stack -e <environment> [-l <pipeline>] [-p <profile_name>] <service>\n\n' +
+      message + '\n')
    sys.exit(exit_code)
 
-def load_json(filename):
-   try:
-      data = json.load(open(filename))
-   except ValueError as e:
-      print("ERROR: Malformed JSON in '" + filename + "': " + str(e) )
-      sys.exit(2)
-   except IOError as e:
-      print ("ERROR: '" + filename + "' file not found")
-      sys.exit(2)
-   return data
+
+class Stack():
+
+   def __init__(self, template, i):
+
+      self.id = None
+      self.stack_count = "%02d" % i
+      self.stack_count_max = "%02d" % template['StackCountMax']
+      self.stack_type = template['StackType']
+      pattern = re.compile("^ec2-")
+      if self.stack_count_max == "01" and not pattern.match(self.stack_type):
+         self.name = template['StackName']
+      else:
+         self.name = template['StackName'] + "-" + self.stack_count
+      self.params = template['Parameters']
+      for i, param in enumerate(self.params):
+         if param['ParameterKey'] == "StackCount":
+            param['ParameterValue'] = self.stack_count
+            self.params.pop(i)
+            self.params.append(param)
+      self.template = template['Template']
+      self.client = boto3.client('cloudformation', region_name=template['Region'])
+      self.delete_flag = False
+      self.get_state()
+      self.display_events = True
+
+
+   def get_state(self):
+
+      try:
+         if self.id:
+            self.stack = self.client.describe_stacks(StackName=self.id)
+         else:
+            self.stack = self.client.describe_stacks(StackName=self.name)
+            self.id = self.stack['Stacks'][0]['StackId']
+         self.state = self.stack['Stacks'][0]['StackStatus']
+         response = self.client.describe_stack_events(StackName=self.id)
+         self.stack_events = response['StackEvents']
+         self.stack_events.reverse
+         self.latest_event = self.stack_events[0]
+         self.exists = True
+      except ClientError as e:
+         if 'does not exist' not in str(e):
+            raise e
+         self.exists = False
+
+
+   def delete(self):
+
+      self.delete_flag = True
+
+      if not self.exists:
+         print("Stack '" + self.name + "' does not exist, unable to delete")
+      else:
+         print("\nDeleting CloudFormation stack: " + self.name + "\n")
+         self.client.delete_stack(StackName=self.id)
+
+
+   def update(self):
+
+      if self.exists:
+         print(
+            "\nUpdating existing CloudFormation stack: " + self.name +
+            " (" + self.stack_count + "/" + self.stack_count_max + ")\n")
+         try:
+            response = self.client.update_stack(
+               StackName = self.id,
+               TemplateBody = self.template,
+               Parameters = self.params,
+               Capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'])
+         except ClientError as e:
+            if "No updates are to be performed" in str(e):
+               print("No updates required.")
+               self.display_events = False
+            else:
+               raise e
+      else:
+         print("\nCreating new CloudFormation stack: " + self.name +
+            " (" + self.stack_count + "/" + self.stack_count_max + ")\n")
+         response = self.client.create_stack(
+            StackName = self.name,
+            TemplateBody = self.template,
+            Parameters = self.params,
+            Capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'])
+         time.sleep(2)
+
+
+   def display(self):
+
+      if not self.display_events:
+         return
+
+      self.get_state()
+      index = self.latest_event
+
+      while True:
+         self.get_state()
+         for e in self.stack_events:
+            if e == index:
+               index = self.latest_event
+               break
+            print(
+               e.get('Timestamp', ""),
+               e.get('ResourceStatus', ""),
+               e.get('ResourceType', ""),
+               e.get('LogicalResourceId', ""),
+               e.get('ResourceStatusReason', ""),
+               sep=" ")
+         if self.state in completed_states:
+            break
+         time.sleep(2)
+
+      if not self.delete_flag:
+         print("\nRESOURCES:\n")
+         resources = self.client.describe_stack_resources(StackName=self.id)
+         for r in resources['StackResources']:
+            print(
+               r.get('ResourceType', ""),
+               r.get('PhysicalResourceId', ""),
+               r.get('LogicalResourceId', ""),
+               r.get('ResourceStatus', ""),
+               sep=" ")
+         if 'Outputs' in self.stack['Stacks'][0]:
+            outputs = self.stack['Stacks'][0]['Outputs']
+            print("\nOUTPUTS:\n")
+            for o in outputs:
+               print(
+                  o.get('OutputKey', ""),
+                  o.get('OutputValue', ""),
+                  o.get('Description', ""),
+                  sep=" ")
+         print("\nSTATUS: ", self.state, "\n", sep="")
+
+         if "FAILED" in self.state or "ROLLBACK" in self.state:
+            sys.exit(2)
+
+
+class Templates:
+
+   def __init__(self, kwargs):
+
+      self.environment = kwargs['environment']
+      self.service = kwargs['service']
+      self.pipeline = kwargs.get('pipeline', 'main')
+      source_path = './'
+
+      required_params = {
+         'Service': self.service,
+         'StackType': None,
+         'Environment': self.environment
+      }
+
+      template_path = source_path + self.service + '/cloudformation/'
+      env_file = source_path + self.service + '/environment/' + \
+         self.pipeline + '_' + self.environment + '.yml'
+
+      yaml.add_multi_constructor('', self.__yml_contructor__)
+
+      # load env configuration check for errors
+      with open(env_file) as f:
+         data = f.read()
+      env_vars = yaml.load(data)
+
+      if env_vars is None:
+         sys.exit("ERROR: '" + env_file + "' configuration file not defined.")
+
+      self.base_params = env_vars.get('BaseParams', {})
+      if self.base_params is None or len(self.base_params) == 0:
+         sys.exit("ERROR: 'BaseParams' section of '" +
+            env_file + "' config file not defined")
+
+      if 'Region' not in self.base_params:
+         sys.exit("ERROR: Region not specified in 'BaseParams' section of " +
+            "config file: '" + env_file + "'")
+
+      if 'AccountId' not in self.base_params:
+         sys.exit("ERROR: AccountId not specified in 'BaseParams' section of " +
+            "config file '" + env_file + "'")
+      else:
+         cred_account_id = str(boto3.client('sts').get_caller_identity().get('Account'))
+         conf_account_id = str(self.base_params['AccountId'])
+         if cred_account_id != conf_account_id:
+            sys.exit("ERROR: Supplied account credentials for account '" + cred_account_id +
+               "' do not match account '" + conf_account_id + "' configured in " + 
+               "environment file '" + env_file + "'")
+
+      self.role_params = env_vars.get('RoleParams', {})
+      for role, items in self.role_params.items():
+         if items is None or len(items) == 0:
+            sys.exit("ERROR: Role '" + role + "' in 'RoleParams' section of '" +
+               env_file + "' configuration file not correctly defined.")
+
+      for p in list(self.base_params) + \
+            [ key for r, items in self.role_params.items() for key in items ]:
+         if p in required_params:
+            sys.exit("ERROR: '" + p +
+               "' should not be specified in environment variables '" +
+               env_file + "' as this is automatically derived."
+            )
+
+      # pattern to locate appropriate template files
+      pattern = re.compile("^" + self.pipeline + "_"
+          "[0-9][[0-9][0-9]_([-0-9a-zA-Z]+)\.yml$")
+
+      # ordered list of cloudformation templates 
+      template_files = [t for t in sorted(listdir(template_path))
+         if isfile(template_path + t) and pattern.match(t)]
+      if len(template_files) == 0:
+         print("WARNING: No cloudformation templates found")
+
+      # build list of cloudformation templates with associated parameters
+      self.templates = []
+      for filename in template_files:
+         stack_type = pattern.match(filename).group(1)
+         required_params['StackType'] = stack_type
+
+         combined_params = self.base_params.copy()
+
+         stack_count_max = 1
+         for role in self.role_params:
+            items = self.role_params[role]
+            if 'Region' in items:
+               sys.exit("ERROR: Region must not be defined in 'RoleParams' " +
+                  "section of '" + env_file + "' configuration file.")
+            if role == stack_type:
+               stack_count_max = items.get('StackCount', 1)
+               combined_params.update(items)
+
+         print("Reading template file '" + filename + "'")
+
+         with open(template_path + filename) as f:
+            template_data = f.read()
+         template_yml = yaml.load(template_data)
+
+         params = []
+         for param in template_yml.get('Parameters', []):
+            if param not in combined_params and param not in required_params:
+               sys.exit("ERROR: Parameter '" +
+                  param + "' in template '" +
+                  filename + "' not defined in '" +
+                  env_file + "' either in 'BaseParams' or 'RoleParams' sections")
+            if param in required_params:
+               params.append({
+                  "ParameterKey" : param,
+                  "ParameterValue" : str(required_params[param])})
+            else:
+               params.append({
+                  "ParameterKey" : param,
+                  "ParameterValue" : str(combined_params[param])})
+         self.templates.append({
+            "Template" : template_data,
+            "Parameters" : params,
+            "StackName" : '-'.join([ self.service, self.environment, stack_type]),
+            "Region" : self.base_params['Region'],
+            "StackCountMax" : stack_count_max,
+            "StackType" : stack_type})
+
+
+   def __iter__(self):
+      return iter(self.templates)
+
+
+   def __yml_contructor__(self, loader, tag_suffix, node):
+      return tag_suffix + ' ' + node.value
+
+
+   def generate_inventory(self):
+
+      filename = "./" + self.service + "/ansible/inventories/" + \
+         self.pipeline + "_" + self.environment
+      print("\nWriting inventory of EC2 hosts: " + filename)
+      f = open(filename, 'w')
+
+      private_hosted_zone = self.base_params.get(
+         'PrivateHostedZone', "local"
+      )
+
+      # order role params to avoid differences in inventory output between runs
+      pattern = re.compile("^ec2-([a-z]{3})$")
+      roles = [ pattern.match(role).group(1) for role in self.role_params
+         if pattern.match(role) ]
+      roles.sort()
+
+      for role in roles:
+         stack_type = "ec2-" + role
+         f.write("[" + role +  "]\n")
+         count = self.role_params[stack_type].get('StackCount', 1)
+         for i in range(0, count):
+            f.write(
+               self.service + "-" + self.environment + "-" +
+               stack_type + "-%02d." % (i + 1) + private_hosted_zone + "\n"
+            )
+         f.write("\n")
+         f.write("[" + role + ":vars]\n")
+         f.write("instance_role_name=" + role + "\n\n")
+
+      f.write("[all-roles:children]\n")
+      for role in roles:
+         f.write(role + "\n")
+      
+      f.write("\n[all-roles:vars]\n")
+      f.write("service=" + self.service + "\n")
+      f.write("environment_name=" + self.environment + "\n")
+      f.close()
+
+
+def deploy_stacks(kwargs):
+
+   delete = kwargs.get('delete', False)
+
+   templates = Templates(kwargs)
+
+   for t in templates:
+     for i in range(1, t['StackCountMax'] + 1):
+         s = Stack(t, i)
+         if delete:
+            s.delete()
+         else:
+            s.update()
+         s.display()
+
+   templates.generate_inventory()
+
 
 def main(argv):
 
-   # validate supplied command line options and arguments
-   try:
-      opts, args = getopt.getopt(argv, "hp:", ["profile="])
-   except getopt.GetoptError:
-      usage(2)
-   if not args or \
-         (args[0] == "create" or args[0] == "update") and len(args) != 3 or \
-         (args[0] =="delete" and len(args) != 2) or \
-         (args[0] != "create" and args[0] != "update" and args[0] != "delete"):
-      usage(2)
-   
-   action = args[0]
+   opts, args = getopt.getopt(argv, 'hl:p:e:d')
+
+   kwargs = {}
    for opt, arg in opts:
-      if opt in ("-h"):
-         usage(0)
-      elif opt in ("-p", "--profile"):
-         profile_name = arg
+      if opt in ('-h'):
+         usage(0, "Please rerun with the appropriate parameters.")
+      elif opt in ('-e', '--environment'):
+         kwargs['environment'] = arg
+      elif opt in ('-l', '--pipeline'):
+         kwargs['pipeline'] = arg
+      elif opt in ('-p', '--profile'):
+         boto3.setup_default_session(profile_name=arg)
+   kwargs['service'] = args[0]
+   deploy_stacks(kwargs)
 
-   session = boto3.session.Session(profile_name=profile_name)
-   client = session.client('cloudformation')
-   cloudformation = session.resource('cloudformation')
 
-   if action == "delete":
-      stack_name = args[1]
-      stack = client.describe_stacks(StackName=stack_name)
-      stack_id = stack['Stacks'][0]['StackId']
-      # get any existing events so we don't have to display them
-      events = client.describe_stack_events(StackName=stack_id)
-      start_index = len(events['StackEvents'])
-      response = client.delete_stack(StackName=stack_id)
-   else:
-      template = load_json(args[1])
-      template_string = json.dumps(template)
-      params_list = load_json(args[2])
-      # validate parameters format and key values
-      try:
-         params_dict = { param["ParameterKey"] : param["ParameterValue"] for param in params_list}
-      except KeyError as e:
-         print("ERROR: Invalid structure of parameters file.")
-         sys.exit(2)
-      for param in required_params:
-         if not param in params_dict:
-            print("ERROR: Required parameter '" + param + "' not found in parameters file.")
-            sys.exit(2) 
-      # stack_name = params_dict["Service"] + "_" + params_dict["Component"] + "_" + params_dict["Environment"] + "_" + params_dict["Region"]
-      stack_name = "-".join([params_dict[required_param] for required_param in required_params]) 
-      params_filename = args[2].replace("-params-", "-").replace(".json", "") 
-      template_filename = args[1].replace("-template.json", "") 
-      if stack_name != params_filename:
-         print("ERROR: Parameters defined in file do not match those in params filename")
-         sys.exit(2)
-      elif template_filename not in stack_name:
-         print("ERROR: Parameters defined in file do not match those in template filename")
-         sys.exit(2)
-
-   # initiate stack create or update
-   if action == "create":
-      response = client.create_stack(StackName=stack_name, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
-      stack = client.describe_stacks(StackName=stack_name)
-      stack_id = stack['Stacks'][0]['StackId']
-      start_index = 0
-   elif action == "update":
-      # get any existing events so we don't have to display them
-      stack = client.describe_stacks(StackName=stack_name)
-      stack_id = stack['Stacks'][0]['StackId']
-      events = client.describe_stack_events(StackName=stack_id)
-      start_index = len(events['StackEvents'])
-      
-      # use ImageID from running stack so we don't nuke deployed application
-      stack = cloudformation.Stack(stack_id)
-      ami = None
-      for param in stack.parameters:
-         if param['ParameterKey'] == 'ImageId':
-            ami = param['ParameterValue']
-      if ami:
-         for i, param in enumerate(params_list):
-            if param['ParameterKey'] == 'ImageId':
-               if param['ParameterValue'] == ami:
-                  print("INFO: ImageId in running stack same as local file.")
-               else:
-                  params_list[i]['ParameterValue'] = ami
-                  print("INFO: Updating CloudFormation parameters to use ImageId from running stack (" + ami +")")
-      response = client.update_stack(StackName=stack_id, TemplateBody=template_string, Parameters=params_list, Capabilities=['CAPABILITY_IAM'])
-
-   # print out stack evens as they occur
-   print("\nEVENTS:\n")
-   while True:
-      stack_events = client.describe_stack_events(StackName=stack_id)
-      events = stack_events['StackEvents']
-      events.reverse()
-      end_index = len(events)
-      for index in range(start_index, end_index):
-         for field in output_fields:
-            if field in events[index]:
-               print(str(events[index][field])),
-         print
-      start_index = end_index
-      stack = client.describe_stacks(StackName=stack_id)
-      stack_state = stack['Stacks'][0]['StackStatus']
-      if stack_state in completed_states:
-         print("\nRESOURCES:\n")
-         resources = client.describe_stack_resources(StackName=stack_id)
-         for resource in resources['StackResources']:
-             for field in ["ResourceType", "PhysicalResourceId", "LogicalResourceId", "ResourceStatus"]:
-               if field in resource:
-                  print(resource[field]),
-             print
-         if "Outputs" in stack['Stacks'][0]:
-            outputs = stack['Stacks'][0]['Outputs']
-            print("\nOUTPUTS:\n")
-            for output in outputs:
-               for field in ["OutputKey", "OutputValue", "Description"]:
-                  if field in output:
-                     print(output[field] + " "),
-               print
-         print("\nSTATUS: " + stack_state)
-         if "FAILED" in stack_state or "ROLLBACK" in stack_state:
-            sys.exit(2)
-         else:
-            sys.exit(0)
-      time.sleep(2)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
    main(sys.argv[1:])

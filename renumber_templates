@@ -1,0 +1,24 @@
+#!/usr/bin/python3
+
+import os, re, json
+from os import listdir
+from os.path import isfile, islink
+
+pattern = re.compile("^[0-9][[0-9][0-9]_([-0-9a-zA-Z]+)\.yml$")
+
+mapping = {}
+for i, src in enumerate(sorted(listdir("./"))):
+   if isfile(src) and pattern.match(src):
+      stack_type = pattern.match(src).group(1)
+      dst = "%02d0" % (i + 1) + "_" + stack_type + ".yml"
+      target = { "Dest" : dst }
+      if os.path.islink(src):
+         target["Link"] = mapping[os.readlink(src)]["Dest"]
+      mapping[src] = target
+      
+for key, value in mapping.items():
+   if "Link" in value:
+      os.remove(key)
+      os.symlink(value["Link"], value["Dest"])
+   else:
+      os.rename(key, value["Dest"])

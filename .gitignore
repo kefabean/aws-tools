@@ -1,3 +1,5 @@
 AmazonEC2.json
 AmazonRDS.json
 pricing.csv
+pricing_output.csv
+credentials
