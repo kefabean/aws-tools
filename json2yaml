@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 import json, yaml, sys
 
 file_name_in = sys.argv[1]

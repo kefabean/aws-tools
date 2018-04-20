@@ -112,13 +112,14 @@ def main(argv):
          "Generating credentials for local account '" + 
          conf['account_number'] + "'"
       )
-      
+   role_arn =  "arn:aws:iam::" + conf['target_account'] + ":role/" + conf['role_name']
+   role_session_name = conf['username'] + "@" + conf['target_account']
    if conf['role_name']:
       response = sts.assume_role(
-         RoleArn = "arn:aws:iam::" + conf['target_account'] + ":role/" + conf['role_name'],
-         RoleSessionName = conf['role_name'] + conf['target_account'],
+         RoleArn = role_arn,
+         RoleSessionName = role_session_name,
          SerialNumber = mfa_serial_number,
-         TokenCode = mfa_token,
+         TokenCode = str(mfa_token),
          DurationSeconds = 3600
       )
    else: 
