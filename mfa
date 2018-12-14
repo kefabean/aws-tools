@@ -16,7 +16,7 @@ def usage():
       "   -u, --user             set name of AWS user associated with MFA device\n"
       "   -a, --account          set AWS account number to request temporary credentials from\n"
       "   -t, --target-account   set target AWS account to assume role in\n"
-      "   -n, --role-name        set role name to assume in target account \n"
+      "   -n, --role-arn        set role name to assume in target account \n"
       "   -r, --region           set default region to associate with temporary credentials\n"
    )
 
@@ -104,26 +104,24 @@ def main(argv):
    sts = session.client("sts")
    if conf['role_name']:
       print(
-         "Assuming role '" + conf['role_name'] +
+         "Using AssumeRole '" + conf['role_name'] +
          "' in remote account '" + conf['target_account'] + "'"
       )
-   else:
-      print(
-         "Generating credentials for local account '" + 
-         conf['account_number'] + "'"
-      )
-   role_arn =  "arn:aws:iam::" + conf['target_account'] + ":role/" + conf['role_name']
-   role_session_name = conf['username'] + "@" + conf['target_account']
-   if conf['role_name']:
+      role_name =  "arn:aws:iam::" + conf['target_account'] + ":role/" + conf['role_name']
+      role_session_name = conf['username'] + "@" + conf['target_account']
       response = sts.assume_role(
-         RoleArn = role_arn,
+         RoleArn = role_name,
          RoleSessionName = role_session_name,
          SerialNumber = mfa_serial_number,
          TokenCode = str(mfa_token),
-         DurationSeconds = 3600
+         DurationSeconds = 28800
       )
-   else: 
-   	response = sts.get_session_token(
+   else:
+      print(
+         "Using GetSessionToken to acquire temporary credentials in account '" + 
+         conf['account_number'] + "'"
+      )
+      response = sts.get_session_token(
          DurationSeconds = 28800,
          SerialNumber = mfa_serial_number,
          TokenCode = mfa_token
@@ -135,13 +133,15 @@ def main(argv):
       config.add_section(profile_mfa)
    except configparser.DuplicateSectionError:
       pass
+   print(sts_token)
    config.set(profile_mfa, "aws_access_key_id", sts_token['AccessKeyId'])
    config.set(profile_mfa, "aws_secret_access_key", sts_token['SecretAccessKey'])
    config.set(profile_mfa, "aws_security_token", sts_token['SessionToken'])
    config.set(profile_mfa, "expiration", str(sts_token['Expiration']))
    for section in [ profile, profile_mfa ]:
       for c in conf:
-         config.set(section, c, str(conf[c]))
+         if conf[c]:
+            config.set(section, c, str(conf[c]))
    with open(aws_creds, 'w') as configfile:
       config.write(configfile)
 
