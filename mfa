@@ -137,6 +137,7 @@ def main(argv):
    config.set(profile_mfa, "aws_access_key_id", sts_token['AccessKeyId'])
    config.set(profile_mfa, "aws_secret_access_key", sts_token['SecretAccessKey'])
    config.set(profile_mfa, "aws_security_token", sts_token['SessionToken'])
+   config.set(profile_mfa, "aws_session_token", sts_token['SessionToken'])
    config.set(profile_mfa, "expiration", str(sts_token['Expiration']))
    for section in [ profile, profile_mfa ]:
       for c in conf:
